@@ -700,8 +700,17 @@ class MoveScreen(ModalScreen):
             else:
                 lines.append(f"  [red]skip[/red]  {it.friendly}: {it.note}")
         n = sum(1 for it in self._plan if it.status == "move")
-        lines.append(f"\n[b]{n}[/b] to move — press [b]Apply move[/b]." if n
-                     else "\n[dim]Nothing to move.[/dim]")
+        if n:
+            lines.append(f"\n[b]{n}[/b] to move — press [b]Apply move[/b].")
+        elif all(it.status == "no_target" for it in self._plan):
+            missing = {it.note.removeprefix("no bridge maps to ") for it in self._plan
+                       if it.status == "no_target"}
+            lines.append(
+                f"\n[red]No HomeKit bridge exists for: {', '.join(sorted(missing))}[/red]\n"
+                "Create one in HA → Settings → Devices & Services → Add Integration → "
+                "HomeKit Bridge, then refresh and try again.")
+        else:
+            lines.append("\n[dim]Nothing to move.[/dim]")
         self._set("\n".join(lines))
         self.query_one("#apply", Button).disabled = n == 0
 
