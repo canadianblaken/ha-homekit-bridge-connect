@@ -1,0 +1,17 @@
+[project]
+name = "haconnect"
+version = "0.1.0"
+description = "Reconcile Home Assistant areas with HomeKit rooms (Textual TUI)"
+requires-python = ">=3.11"
+dependencies = [
+    "textual>=0.80",
+    "websockets>=12",
+    "mcp>=1.0",
+    "aiohttp>=3.9",
+]
+
+[project.scripts]
+haconnect = "reconcile.__main__:main"
+
+[tool.setuptools]
+packages = ["reconcile"]

@@ -1,0 +1,9 @@
+# Copy to config.toml and adjust. NO secrets here — the HA token goes in .env.
+
+[ha]
+ws_url = "ws://HA_HOST:8123/api/websocket"
+
+[homekit]
+sse_url = "http://HOMEKIT_PROXY_HOST:8788/sse"
+# Optional. Leave blank to use the proxy's default home.
+home_id = ""
