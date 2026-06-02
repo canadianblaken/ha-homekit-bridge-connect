@@ -1,5 +1,13 @@
 # haconnect
 
+## The problem
+
+If you use both Home Assistant and Apple HomeKit, your devices live in two separate name/room systems that drift apart over time. HA calls it "Office" and groups entities by area; HomeKit calls it "Home Office" and groups accessories by room — and after any device swap, rename, or migration they're out of sync. Fixing this manually means toggling devices one by one to figure out which UUID is which, then hunting through the HomeKit app to reassign rooms and rename accessories — tedious, error-prone, and easy to get wrong when names are similar or accessories are mislabelled.
+
+`haconnect` solves this by letting you physically actuate a device once and automatically correlating the HA state change with the HomeKit accessory that responded. Confirmed matches are saved, and the tool then applies room assignments and renames back to HomeKit in gated, dry-run-first steps — nothing is written until you explicitly confirm.
+
+---
+
 Reconcile Home Assistant **areas** with HomeKit **rooms**, via a Textual TUI.
 Built in gated phases.
 
