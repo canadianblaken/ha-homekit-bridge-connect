@@ -102,3 +102,45 @@ class BridgeManager:
                 async with s.post(f"{self.base}/api/config/config_entries/entry/{eid}/reload",
                                   headers=self.hdr) as r:
                     await r.read()
+
+    async def create_bridge(self, title: str) -> str:
+        """Create a new HomeKit bridge with the given title. Returns entry_id.
+        The bridge will need pairing in the Home app before it publishes devices."""
+        async with aiohttp.ClientSession() as s:
+            async with s.post(f"{self.base}/api/config/config_entries/flow",
+                              headers=self.hdr, json={"handler": "homekit"}) as r:
+                init = await r.json()
+            flow_id = init.get("flow_id")
+            if not flow_id:
+                raise BridgeError(f"could not start config flow: {init}")
+            if init.get("type") == "abort":
+                raise BridgeError(f"flow aborted at start: {init.get('reason')}")
+            # Use schema defaults (HA picks an available port); override only name.
+            schema = init.get("data_schema", [])
+            payload = {f["name"]: f["default"] for f in schema if "default" in f}
+            payload["name"] = title
+            async with s.post(f"{self.base}/api/config/config_entries/flow/{flow_id}",
+                              headers=self.hdr, json=payload) as r:
+                result = await r.json()
+            if result.get("type") == "create_entry":
+                entry_id = (result.get("result") or {}).get("entry_id") or result.get("entry_id")
+                if not entry_id:
+                    raise BridgeError(f"no entry_id in create_entry response: {result}")
+                return entry_id
+            if result.get("type") == "abort":
+                raise BridgeError(f"flow aborted: {result.get('reason')}")
+            try:
+                async with s.delete(
+                        f"{self.base}/api/config/config_entries/flow/{flow_id}",
+                        headers=self.hdr) as r:
+                    await r.read()
+            except Exception:
+                pass
+            raise BridgeError(f"unexpected flow result: {result}")
+
+    async def delete_bridge(self, entry_id: str) -> None:
+        """Delete a HomeKit bridge config entry."""
+        async with aiohttp.ClientSession() as s:
+            async with s.delete(f"{self.base}/api/config/config_entries/entry/{entry_id}",
+                                headers=self.hdr) as r:
+                await r.read()

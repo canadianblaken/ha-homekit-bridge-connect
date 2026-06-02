@@ -74,6 +74,7 @@ class MoveItem:
     target_entry: str | None
     status: str          # "move" | "already" | "no_target"
     note: str = ""
+    target_area: str | None = None  # intended area; set when status="no_target" and area is known
 
 
 @dataclass

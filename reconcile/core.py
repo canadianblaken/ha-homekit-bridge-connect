@@ -167,7 +167,8 @@ class ReconcileSession:
             se = src["entry_id"] if src else None
             if target is None:
                 items.append(MoveItem(eid, fr, st, se, None, None, "no_target",
-                                      f"no bridge maps to {target_area}"))
+                                      f"no bridge maps to {target_area}",
+                                      target_area=target_area))
             elif se == target["entry_id"]:
                 items.append(MoveItem(eid, fr, st, se, target["title"], target["entry_id"],
                                       "already", "already on this bridge"))
@@ -191,6 +192,14 @@ class ReconcileSession:
                 sub, _ = self.plan_move([eid], area, bridges)
                 items.extend(sub)
         return items
+
+    async def create_bridge(self, area_name: str) -> str:
+        """Create a new HomeKit bridge named after an area. Returns entry_id."""
+        return await self.bridges.create_bridge(area_name)
+
+    async def delete_bridge(self, entry_id: str) -> None:
+        """Delete a HomeKit bridge config entry."""
+        await self.bridges.delete_bridge(entry_id)
 
     async def apply_move(self, items: list[MoveItem], bridges: list[dict]) -> list[str]:
         """Remove moved entities from their source bridges, add each to ITS target

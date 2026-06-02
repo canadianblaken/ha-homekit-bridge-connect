@@ -627,6 +627,37 @@ class RoomPickerScreen(ModalScreen):
         self.dismiss(None)
 
 
+class BridgePickerScreen(ModalScreen):
+    """Pick a bridge from the current snapshot (for deletion)."""
+
+    def __init__(self, bridges: list[dict]):
+        super().__init__()
+        self._bridges = bridges
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="picker-box"):
+            yield Static("[b]Select a bridge to delete:[/b]", id="picker-title")
+            yield ListView(id="picker-list")
+            with Horizontal(id="picker-buttons"):
+                yield Button("Cancel", variant="primary", id="cancel")
+
+    def on_mount(self) -> None:
+        lv = self.query_one("#picker-list", ListView)
+        for b in self._bridges:
+            n = len(b.get("include_entities", []))
+            lv.append(ListItem(Label(f"{b['title']}  ({n} entities)")))
+        if self._bridges:
+            lv.index = 0
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        idx = event.list_view.index
+        if idx is not None and idx < len(self._bridges):
+            self.dismiss(self._bridges[idx])
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(None)
+
+
 class MoveScreen(ModalScreen):
     """Move device(s) to the right HomeKit bridge (the durable fix). Defaults to
     moving each device onto ITS OWN HA-area bridge; offers a 'pick a room' override
@@ -639,6 +670,7 @@ class MoveScreen(ModalScreen):
         self._plan = None
         self._bridges = None
         self._target_label = None
+        self._missing_areas: set[str] = set()
 
     def compose(self) -> ComposeResult:
         names = ", ".join(self.session._friendly_of(e) for e in self.entity_ids)
@@ -649,6 +681,8 @@ class MoveScreen(ModalScreen):
             yield Static("Planning…", id="move-plan")
             with Horizontal(id="assign-buttons"):
                 yield Button("Apply move", variant="error", id="apply", disabled=True)
+                yield Button("Create bridge…", variant="warning", id="create_bridge", disabled=True)
+                yield Button("Delete bridge…", id="delete_bridge", disabled=True)
                 yield Button("Pick a room instead…", id="pick")
                 yield Button("Close", variant="primary", id="close")
 
@@ -700,15 +734,31 @@ class MoveScreen(ModalScreen):
             else:
                 lines.append(f"  [red]skip[/red]  {it.friendly}: {it.note}")
         n = sum(1 for it in self._plan if it.status == "move")
+        # Update create/delete button state.
+        self._missing_areas = {
+            it.target_area for it in self._plan
+            if it.status == "no_target" and it.target_area
+        }
+        all_no_target = bool(self._plan) and all(
+            it.status == "no_target" for it in self._plan)
+        can_create = all_no_target and bool(self._missing_areas)
+        create_btn = self.query_one("#create_bridge", Button)
+        create_btn.disabled = not can_create
+        if can_create:
+            create_btn.label = (
+                f"Create bridge for '{next(iter(sorted(self._missing_areas)))}'…"
+                if len(self._missing_areas) == 1
+                else f"Create {len(self._missing_areas)} bridges…")
+        self.query_one("#delete_bridge", Button).disabled = not self._bridges
+
         if n:
             lines.append(f"\n[b]{n}[/b] to move — press [b]Apply move[/b].")
-        elif all(it.status == "no_target" for it in self._plan):
-            missing = {it.note.removeprefix("no bridge maps to ") for it in self._plan
-                       if it.status == "no_target"}
+        elif can_create:
+            area_list = ", ".join(f"'{a}'" for a in sorted(self._missing_areas))
             lines.append(
-                f"\n[red]No HomeKit bridge exists for: {', '.join(sorted(missing))}[/red]\n"
-                "Create one in HA → Settings → Devices & Services → Add Integration → "
-                "HomeKit Bridge, then refresh and try again.")
+                f"\n[red]No HomeKit bridge for: {area_list}[/red]\n"
+                "Use [b]Create bridge[/b] to add one, or create it manually in\n"
+                "HA → Settings → Devices & Services → Add Integration → HomeKit Bridge.")
         else:
             lines.append("\n[dim]Nothing to move.[/dim]")
         self._set("\n".join(lines))
@@ -722,6 +772,79 @@ class MoveScreen(ModalScreen):
             self.run_worker(self._pick(), exclusive=True)
         elif bid == "apply":
             self.run_worker(self._apply(), exclusive=True)
+        elif bid == "create_bridge":
+            self.run_worker(self._create_bridges(), exclusive=True)
+        elif bid == "delete_bridge":
+            self.run_worker(self._delete_bridge(), exclusive=True)
+
+    async def _create_bridges(self) -> None:
+        areas = sorted(self._missing_areas)
+        if not areas:
+            return
+        area_list = ", ".join(f"'{a}'" for a in areas)
+        ok = await self.app.push_screen_wait(ConfirmScreen(
+            "Create HomeKit bridge(s)",
+            f"Create bridge(s) for: {area_list}\n\n"
+            "[dim]Each new bridge must be paired in the Home app "
+            "before its devices appear in HomeKit.[/dim]",
+            confirm_label="Create", confirm_variant="warning"))
+        if not ok:
+            return
+        self._set(f"Creating bridge(s): {area_list}…")
+        try:
+            for area in areas:
+                await self.session.create_bridge(area)
+        except Exception as e:
+            self._set(f"[red]Create failed:[/red] {e}")
+            return
+        self._set("Re-reading bridges…")
+        try:
+            self._bridges = await self.session.bridge_snapshot()
+        except Exception as e:
+            self._set(f"[red]Snapshot failed:[/red] {e}")
+            return
+        if self._target_label and self._target_label != "each device's HA area":
+            items, _ = self.session.plan_move(self.entity_ids, self._target_label, self._bridges)
+            self._plan = items
+        else:
+            self._plan = self.session.plan_move_auto(self.entity_ids, self._bridges)
+        self._show_plan("Bridge created — review and apply:")
+        self.app.notify(
+            f"Created bridge(s) for {area_list}. "
+            "Pair each in the Home app before devices appear in HomeKit.",
+            title="Bridge(s) created", timeout=10)
+
+    async def _delete_bridge(self) -> None:
+        if not self._bridges:
+            self._set("No bridges loaded yet.")
+            return
+        bridge = await self.app.push_screen_wait(BridgePickerScreen(self._bridges))
+        if not bridge:
+            return
+        n = len(bridge.get("include_entities", []))
+        ok = await self.app.push_screen_wait(ConfirmScreen(
+            "Delete bridge",
+            f"Delete bridge [b]{bridge['title']}[/b]?\n"
+            f"It currently has [b]{n}[/b] entities.\n\n"
+            "[b]This removes the bridge from HA and HomeKit.[/b]",
+            confirm_label="Delete", confirm_variant="error"))
+        if not ok:
+            return
+        self._set(f"Deleting '{bridge['title']}'…")
+        try:
+            await self.session.delete_bridge(bridge["entry_id"])
+        except Exception as e:
+            self._set(f"[red]Delete failed:[/red] {e}")
+            return
+        self._set("Re-reading bridges…")
+        try:
+            self._bridges = await self.session.bridge_snapshot()
+        except Exception as e:
+            self._set(f"[red]Snapshot failed:[/red] {e}")
+            return
+        self._plan = self.session.plan_move_auto(self.entity_ids, self._bridges)
+        self._show_plan("Bridge deleted — re-planned:")
+        self.app.notify(f"Deleted bridge '{bridge['title']}'.", title="Bridge deleted")
 
     async def _apply(self) -> None:
         if not self._plan:
