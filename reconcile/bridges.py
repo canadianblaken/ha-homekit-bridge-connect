@@ -115,20 +115,39 @@ class BridgeManager:
                 raise BridgeError(f"could not start config flow: {init}")
             if init.get("type") == "abort":
                 raise BridgeError(f"flow aborted at start: {init.get('reason')}")
-            # Use schema defaults (HA picks an available port); override only name.
+            # Only submit keys the schema declares — never inject extras.
             schema = init.get("data_schema", [])
+            schema_keys = {f["name"] for f in schema}
             payload = {f["name"]: f["default"] for f in schema if "default" in f}
-            payload["name"] = title
+            if "name" in schema_keys:
+                payload["name"] = title
             async with s.post(f"{self.base}/api/config/config_entries/flow/{flow_id}",
                               headers=self.hdr, json=payload) as r:
                 result = await r.json()
-            if result.get("type") == "create_entry":
-                entry_id = (result.get("result") or {}).get("entry_id") or result.get("entry_id")
-                if not entry_id:
-                    raise BridgeError(f"no entry_id in create_entry response: {result}")
-                return entry_id
-            if result.get("type") == "abort":
-                raise BridgeError(f"flow aborted: {result.get('reason')}")
+            # Walk remaining steps (some HA versions have a pairing/confirm step).
+            for _ in range(5):
+                rtype = result.get("type")
+                if rtype == "create_entry":
+                    entry_id = ((result.get("result") or {}).get("entry_id")
+                                or result.get("entry_id"))
+                    if not entry_id:
+                        raise BridgeError(f"no entry_id in create_entry: {result}")
+                    return entry_id
+                if rtype == "abort":
+                    raise BridgeError(f"flow aborted: {result.get('reason')}")
+                if rtype != "form":
+                    break
+                # Submit next step with schema defaults only.
+                step_schema = result.get("data_schema", [])
+                step_keys = {f["name"] for f in step_schema}
+                step_payload = {f["name"]: f["default"]
+                                for f in step_schema if "default" in f}
+                if "name" in step_keys:
+                    step_payload["name"] = title
+                async with s.post(
+                        f"{self.base}/api/config/config_entries/flow/{flow_id}",
+                        headers=self.hdr, json=step_payload) as r:
+                    result = await r.json()
             try:
                 async with s.delete(
                         f"{self.base}/api/config/config_entries/flow/{flow_id}",
