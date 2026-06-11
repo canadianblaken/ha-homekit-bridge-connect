@@ -1,4 +1,4 @@
-# haconnect
+# haconnect - Yes this was Vibe Coded
 
 ## The problem
 
