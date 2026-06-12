@@ -88,6 +88,35 @@ class ReconcileSession:
         device_map = await self.hk.device_map()
         self.hk_accessories = parse_accessories(device_map)
         self.hk_by_uuid = {h.uuid: h for h in self.hk_accessories}
+        self._repair_stale_mappings()
+
+    def _repair_stale_mappings(self) -> None:
+        """Re-key saved mappings after HomeKit republishes accessories.
+
+        Moving an entity between HA HomeKit bridges changes the HomeKit UUID.
+        The saved mapping remains valid by entity/name, but plans need the
+        current UUID. Repair only when the saved HomeKit name has exactly one
+        current accessory match, so duplicate names stay explicit problems.
+        """
+        by_name: dict[str, list[HKAccessory]] = collections.defaultdict(list)
+        for hk in self.hk_accessories:
+            by_name[normalize_name(hk.name)].append(hk)
+
+        for mapping in self.store.all():
+            if mapping.get("uuid") in self.hk_by_uuid:
+                continue
+            hk_name = normalize_name(mapping.get("hk_name"))
+            if not hk_name:
+                continue
+            matches = by_name.get(hk_name, [])
+            if len(matches) != 1:
+                continue
+            hk = matches[0]
+            repaired = dict(mapping)
+            repaired["uuid"] = hk.uuid
+            repaired["hk_name"] = hk.name
+            repaired["room_at_match"] = hk.room
+            self.store.upsert(repaired)
 
     # --- queries ---
     def _visible(self, e: HAEntity) -> bool:
